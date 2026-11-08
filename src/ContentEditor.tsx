@@ -52,6 +52,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   const [selected, setSelected] = useState<Selected | null>(null);
   const [face, setFace] = useState<{ target: EditTarget; family: string } | null>(null);
   const [value, setValue] = useState("");
+  const [customFont, setCustomFont] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -61,7 +62,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   const pending = useRef<Promise<boolean> | null>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
-  const modified = selected?.target.kind === "text" && value !== selected.target.label;
+  const modified = selected?.target.kind === "text" && (value !== selected.target.label || customFont);
   useEffect(() => { onDirty(!!modified || busy); return () => onDirty(false); }, [modified, busy, onDirty]);
 
   useEffect(() => {
@@ -148,7 +149,8 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   };
   const finish = () => {
     if (pending.current) return pending.current;
-    if (selected && modified) return commit({ kind: "text", index: selected.target.index, text: value });
+    if (selected && modified) return commit({ kind: "text", index: selected.target.index, text: value,
+      ...(customFont ? { font: "easyjet" } : {}) });
     setSelected(null); return Promise.resolve(true);
   };
   useImperativeHandle(ref, () => ({ finish, deselect: () => {
@@ -158,7 +160,7 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
 
   const pick = (s: Surface, target: EditTarget) => {
     if (pending.current) return;
-    setError(""); setValue(target.label); setSelected({ page: s.page, target, paper: target.style ? paperColor(s,target) : "" });
+    setError(""); setCustomFont(false); setValue(target.label); setSelected({ page: s.page, target, paper: target.style ? paperColor(s,target) : "" });
     if (!target.style) return;
     // Use the same embedded or system font as the page renderer while the caret is visible.
     const origin = target.style.origin;
@@ -190,11 +192,11 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
   useEffect(() => {
     if (!selected) return;
     const outside = (e: PointerEvent) => {
-      if (!pending.current && e.target instanceof Element && !e.target.closest(".folio-inline-text, .folio-image-actions, .folio-content-target")) void finish();
+      if (!pending.current && e.target instanceof Element && !e.target.closest(".folio-inline-text, .folio-font-actions, .folio-image-actions, .folio-content-target")) void finish();
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, [selected, value]);
+  }, [selected, value, customFont]);
 
   return <>
     {surfaces.map(s => createPortal(<>
@@ -211,7 +213,8 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
         <div className="folio-old-text" style={{ ...rectangle(selected.target,s.viewport), background: selected.paper }} />
         <input ref={input} className="folio-inline-text" aria-label="Edit text on page" maxLength={32767}
           style={{ ...inputStyle(selected.target,s.viewport,selected.paper),
-            ...(face?.target === selected.target ? { fontFamily: face.family } : {}) }} value={value} readOnly={busy}
+            ...(face?.target === selected.target ? { fontFamily: face.family } : {}),
+            ...(customFont ? { fontFamily: '"easyJet Rounded Book"', fontWeight: 400, fontStyle: "normal" } : {}) }} value={value} readOnly={busy}
           onChange={e => { setValue(e.target.value); setError(""); }}
           onKeyDown={e => {
             if (e.nativeEvent.isComposing) return;
@@ -227,6 +230,14 @@ export function ContentEditor({ ref, nextSelection, pdf, viewer, bus, snapshot, 
         }} />
       </div>)}
     </>,s.host,s.page))}
+    {selected?.target.kind === "text" && <div className="folio-font-actions">
+      <label>Font <select aria-label="Text font" disabled={busy} value={customFont ? "easyjet" : "original"}
+        onChange={e => setCustomFont(e.target.value === "easyjet")}>
+        <option value="original">Original font</option>
+        <option value="easyjet">easyJet Rounded Book</option>
+      </select></label>
+      <button className="btn" disabled={busy} onClick={() => void finish()}>Apply</button>
+    </div>}
     <div className="folio-edit-status" role={error ? "alert" : "status"}>{error || (busy ? "Applying edit…" :
       surfaces.length > 0 && surfaces.every(s => targets.get(s.page)?.length === 0) ? "No editable text or images on this page." : "")}</div>
   </>;

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import ocrCatalog from "../electron/ocr-models.json" with { type: "json" };
+import { PDFDocument, PDFDict, PDFName } from "pdf-lib";
 
 // A two-page form with a text field on its first page.
 function formPdf() {
@@ -358,6 +359,7 @@ async function checkContentEditing(app, page, folder, shots) {
   await input.fill("𐍈"); await input.press("Enter");
   await page.getByText(/This font can.t display all of those characters/).waitFor();
   await input.fill("Revised");
+  await page.getByRole("combobox", { name: "Text font", exact: true }).selectOption("easyjet");
   await item("Image 1").click();
   await item("Revised").waitFor();
   await sheet.locator(".textLayer").getByText("Revised", { exact: true }).waitFor();
@@ -380,6 +382,11 @@ async function checkContentEditing(app, page, folder, shots) {
   await save.click();
   assert.equal(await app.evaluate(() => globalThis.folioReordered), "completed");
   await page.window.waitForFunction(() => document.title.startsWith("Objects (edited).pdf"));
+  const exported = await PDFDocument.load(readFileSync(file));
+  const embedded = exported.context.enumerateIndirectObjects().some(([, obj]) => obj instanceof PDFDict
+    && obj.get(PDFName.of("FontName"))?.toString().includes("easyJetRoundedBook")
+    && obj.has(PDFName.of("FontFile2")));
+  assert.ok(embedded, "the edited PDF embeds easyJet Rounded Book for other readers");
   await page.getByRole("button", { name: "Bookmark page 2", pressed: true }).waitFor();
   // Read and rasterize the downloaded bytes with the independent reader, including the untouched page.
   const result = await page.evaluate(async bytes => {

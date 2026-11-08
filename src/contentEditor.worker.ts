@@ -13,7 +13,7 @@ export interface EditTarget {
   box: number[];
   style?: { origin: number[]; axis: number[]; size: number; flags: number; bold: boolean; color: string };
 }
-export type Change = { kind: "text"; index: number; text: string } | { kind: "image"; index: number; file: File };
+export type Change = { kind: "text"; index: number; text: string; font?: "easyjet" } | { kind: "image"; index: number; file: File };
 export type EditorRequest = { source: Uint8Array } | { page: number } | { page: number; change: Change; snapshot: Uint8Array };
 export type EditorReply = { page: number; targets: EditTarget[] } | { bytes: Uint8Array } | { error: string; page?: number };
 
@@ -25,6 +25,22 @@ const ready = (async () => {
   return engine;
 })();
 let source: Uint8Array;
+
+async function fontData() {
+  const response = await fetch(new URL("/fonts/easyJetRoundedBook.ttf", import.meta.url));
+  if (!response.ok) throw new Error("Couldn't load easyJet Rounded Book.");
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function withFont<T>(m: WrappedPdfiumModule, doc: number, bytes: Uint8Array | null, use: (font: number) => T): T {
+  if (!bytes) return use(0);
+  return buffer(m, bytes.length, ptr => {
+    m.pdfium.HEAPU8.set(bytes, ptr);
+    const font = m.FPDFText_LoadFont(doc, ptr, bytes.length, 2, true);
+    if (!font) throw new Error("Couldn't embed easyJet Rounded Book.");
+    try { return use(font); } finally { m.FPDFFont_Close(font); }
+  });
+}
 
 function buffer<T>(m: WrappedPdfiumModule, size: number, use: (ptr: number) => T): T {
   const ptr = m.pdfium.wasmExports.malloc(size);
@@ -137,8 +153,8 @@ function save(m: WrappedPdfiumModule, doc: number) {
   } finally { m.PDFiumExt_CloseFileWriter(writer); }
 }
 
-function replaceText(m: WrappedPdfiumModule, page: number, target: EditTarget, text: string) {
-  const obj = m.FPDFPage_GetObject(page, target.index);
+function replaceText(m: WrappedPdfiumModule, doc: number, page: number, target: EditTarget, text: string, font: number) {
+  let obj = m.FPDFPage_GetObject(page, target.index);
   if (m.FPDFPageObj_GetType(obj) !== 1 || text.length > 32767 || /[\u0000-\u001f]/u.test(text)) {
     throw new Error("Enter a single line of text.");
   }
@@ -149,6 +165,33 @@ function replaceText(m: WrappedPdfiumModule, page: number, target: EditTarget, t
     m.FPDFPageObj_Destroy(fragment);
   }
   if (!text) return;
+  if (font) {
+    const original = obj;
+    obj = buffer(m, 28, ptr => {
+      if (!m.FPDFTextObj_GetFontSize(original, ptr + 24) || !m.FPDFPageObj_GetMatrix(original, ptr)) {
+        throw new Error("Couldn't read this text's position.");
+      }
+      const replacement = m.FPDFPageObj_CreateTextObj(doc, font, m.pdfium.HEAPF32[(ptr + 24) / 4]);
+      if (!replacement) throw new Error("Couldn't create text with this font.");
+      try {
+        if (!m.FPDFPageObj_SetMatrix(replacement, ptr)) throw new Error("Couldn't position this text.");
+        for (const stroke of [false, true]) {
+          const get = stroke ? m.FPDFPageObj_GetStrokeColor : m.FPDFPageObj_GetFillColor;
+          const set = stroke ? m.FPDFPageObj_SetStrokeColor : m.FPDFPageObj_SetFillColor;
+          if (get(original, ptr, ptr + 4, ptr + 8, ptr + 12)) {
+            const [r, g, b, a] = m.pdfium.HEAP32.subarray(ptr / 4, ptr / 4 + 4);
+            if (!set(replacement, r, g, b, a)) throw new Error("Couldn't preserve the text color.");
+          }
+        }
+        m.FPDFTextObj_SetTextRenderMode(replacement, m.FPDFTextObj_GetTextRenderMode(original));
+        if (m.FPDFPageObj_GetStrokeWidth(original, ptr)) m.FPDFPageObj_SetStrokeWidth(replacement, m.pdfium.HEAPF32[ptr / 4]);
+        if (!m.FPDFPage_InsertObjectAtIndex(page, replacement, target.index)) throw new Error("Couldn't insert this text.");
+        return replacement;
+      } catch (error) { m.FPDFPageObj_Destroy(replacement); throw error; }
+    });
+    if (!m.FPDFPage_RemoveObject(page, original)) throw new Error("Couldn't replace this text.");
+    m.FPDFPageObj_Destroy(original);
+  }
   const size = (text.length + 1) * 2;
   buffer(m, size, ptr => {
     m.pdfium.stringToUTF16(text, ptr, size);
@@ -169,14 +212,17 @@ self.onmessage = async ({ data }: MessageEvent<EditorRequest>) => {
       return;
     }
     const { change, snapshot } = data;
+    const fontBytes = change.kind === "text" && change.font === "easyjet" ? await fontData() : null;
     const result = withPage(m, snapshot, page, (doc, handle) => {
       const { targets, imageCount } = pageView(m, handle);
       const target = targets.find(t => t.index === change.index && t.kind === change.kind);
       if (!target) throw new Error("Select the item again.");
       if (change.kind === "image") return replacePageImage(snapshot, page, target.ordinal!, imageCount, change.file);
-      replaceText(m, handle, target, change.text);
-      if (!m.FPDFPage_GenerateContent(handle)) throw new Error("Couldn't write this page.");
-      return save(m, doc);
+      return withFont(m, doc, fontBytes, font => {
+        replaceText(m, doc, handle, target, change.text, font);
+        if (!m.FPDFPage_GenerateContent(handle)) throw new Error("Couldn't write this page.");
+        return save(m, doc);
+      });
     });
     const bytes = await result;
     self.postMessage({ bytes } satisfies EditorReply, { transfer: [bytes.buffer as ArrayBuffer] });

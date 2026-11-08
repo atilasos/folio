@@ -1616,6 +1616,9 @@ kbd {
 }
 
 .folio-content-layer { position: absolute; inset: 0; z-index: 5; overflow: clip; pointer-events: auto; }
+@font-face { font-family: "easyJet Rounded Book"; src: url("/fonts/easyJetRoundedBook.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+.folio-font-actions { position: absolute; top: 10px; right: 16px; z-index: 10; display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 7px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); font-size: 13px; }
+.folio-font-actions select { margin-inline-start: 6px; max-width: 190px; }
 .folio-content-target, .folio-old-text, .folio-inline-text, .folio-image-actions { position: absolute; }
 .folio-content-target { border: 0; padding: 0; border-radius: 0; background: transparent; cursor: text; }
 .folio-content-target[data-kind=image] { cursor: pointer; }
