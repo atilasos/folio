@@ -13,11 +13,20 @@ export const TEXT_FONTS = [
 ] as const;
 export type TextFont = (typeof TEXT_FONTS)[number]["id"];
 export const DEFAULT_TEXT_FONT: TextFont = "sans";
+/** Any size in this range can be typed, to a hundredth of a point; these are offered as suggestions. */
+export const MIN_TEXT_SIZE = 1;
+export const MAX_TEXT_SIZE = 999;
 export const TEXT_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
 export const DEFAULT_TEXT_SIZE = 10;
 
 export const isTextFont = (value: unknown): value is TextFont => TEXT_FONTS.some(f => f.id === value);
-export const isTextSize = (value: unknown): value is number => typeof value === "number" && TEXT_SIZES.includes(value);
+export const isTextSize = (value: unknown): value is number =>
+  typeof value === "number" && value >= MIN_TEXT_SIZE && value <= MAX_TEXT_SIZE;
+/** A typed size as a number of points, or null if it isn't one Folio accepts. Accepts a decimal comma. */
+export function parseTextSize(text: string) {
+  const size = Math.round(Number(text.trim().replace(",", ".")) * 100) / 100;
+  return text.trim() && isTextSize(size) ? size : null;
+}
 export const fontCss = (font: TextFont | undefined) => TEXT_FONTS.find(f => f.id === font)?.css ?? "";
 
 /* The parts of pdf.js's FreeTextEditor used here (not part of its typed public API). */

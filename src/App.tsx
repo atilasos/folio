@@ -22,7 +22,10 @@ import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
 import { MarkupController, type Mark, type MarkupState, type TextStyle } from "./markup";
-import { DEFAULT_TEXT_FONT, DEFAULT_TEXT_SIZE, TEXT_FONTS, TEXT_SIZES, drawTextFonts, isTextFont, isTextSize, type TextFont } from "./textFonts";
+import {
+  DEFAULT_TEXT_FONT, DEFAULT_TEXT_SIZE, MAX_TEXT_SIZE, MIN_TEXT_SIZE, TEXT_FONTS, TEXT_SIZES, drawTextFonts, isTextFont,
+  isTextSize, parseTextSize, type TextFont,
+} from "./textFonts";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
 import { notesJson, notesMarkdown } from "./noteExport";
@@ -213,6 +216,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
   });
   /** The selected text box's font and size, or the next box's. */
   const [textStyle, setTextStyle] = useState(storedTextStyle);
+  /** The size field's text while it's being typed, which can be unfinished ("6," or empty). */
+  const [sizeDraft, setSizeDraft] = useState<string | null>(null);
   const colorsRef = useRef(colors);
   colorsRef.current = colors;
   const pageRef = useRef(1);
@@ -1486,11 +1491,33 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                   onChange={e => chooseTextStyle({ font: e.target.value as TextFont })}>
                   {TEXT_FONTS.map(f => <option key={f.id} value={f.id} style={f.css ? { fontFamily: f.css } : undefined}>{f.name}</option>)}
                 </select>
-                <select className="draw-tool" aria-label="Font size" title="Font size" value={textStyle.size}
-                  onChange={e => chooseTextStyle({ size: Number(e.target.value) })}>
-                  {(TEXT_SIZES.includes(textStyle.size) ? TEXT_SIZES : [...TEXT_SIZES, textStyle.size].sort((a, b) => a - b))
-                    .map(n => <option key={n} value={n}>{n} pt</option>)}
-                </select>
+                <label className="text-size">
+                  <input className="draw-tool" type="text" inputMode="decimal" list="text-sizes" aria-label="Font size"
+                    title={`Font size: any size from ${MIN_TEXT_SIZE} to ${MAX_TEXT_SIZE} pt`} size={4}
+                    aria-invalid={sizeDraft !== null && parseTextSize(sizeDraft) === null}
+                    value={sizeDraft ?? String(textStyle.size)}
+                    onChange={e => {
+                      setSizeDraft(e.target.value);
+                      const size = parseTextSize(e.target.value);
+                      if (size !== null) chooseTextStyle({ size });
+                    }}
+                    onKeyDown={e => {
+                      // Up and Down step by one point, like a number field, without dropping the decimal comma.
+                      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        return;
+                      }
+                      e.preventDefault();
+                      const current = parseTextSize(sizeDraft ?? "") ?? textStyle.size;
+                      const next = e.key === "ArrowUp" ? Math.floor(current) + 1 : Math.ceil(current) - 1;
+                      const size = Math.min(MAX_TEXT_SIZE, Math.max(MIN_TEXT_SIZE, next));
+                      setSizeDraft(String(size));
+                      chooseTextStyle({ size });
+                    }}
+                    onBlur={() => setSizeDraft(null)} />
+                  pt
+                  <datalist id="text-sizes">{TEXT_SIZES.map(n => <option key={n} value={n} />)}</datalist>
+                </label>
               </>}
               {tool === "ink" && drawTool === "Pen" && (
                 <select className="draw-tool" aria-label="Pen width" title="Pen width" defaultValue={markupRef.current?.penWidth ?? 1}
