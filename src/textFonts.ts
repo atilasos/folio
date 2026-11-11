@@ -13,7 +13,7 @@ export const TEXT_FONTS = [
 ] as const;
 export type TextFont = (typeof TEXT_FONTS)[number]["id"];
 export const DEFAULT_TEXT_FONT: TextFont = "sans";
-export const TEXT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
+export const TEXT_SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
 export const DEFAULT_TEXT_SIZE = 10;
 
 export const isTextFont = (value: unknown): value is TextFont => TEXT_FONTS.some(f => f.id === value);
