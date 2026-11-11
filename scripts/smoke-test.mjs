@@ -589,8 +589,7 @@ try {
   await page.locator('button[title^="Text ("]').click();
   // The font and size chosen before clicking apply to the new box, and are saved with it.
   await page.getByRole("combobox", { name: "Font", exact: true }).selectOption("serif");
-  await page.getByRole("combobox", { name: "Font size", exact: true }).selectOption("24");
-  assert.equal(await page.getByRole("combobox", { name: "Font size", exact: true }).locator("option").first().textContent(), "4 pt");
+  await page.getByRole("combobox", { name: "Font size", exact: true }).fill("24");
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
@@ -618,6 +617,17 @@ try {
   await page.locator('button.pill-btn[title^="Undo"]').click();
   assert.match(await boxFont(), /Times New Roman/);
   await page.waitForFunction(() => document.querySelector('select[aria-label="Font"]')?.value === "serif");
+  // Any size can be typed, decimals included, for the selected box only.
+  const sizeField = page.getByRole("combobox", { name: "Font size", exact: true });
+  assert.equal(await sizeField.inputValue(), "24");
+  await sizeField.fill("6,5");
+  assert.match(await restored.locator(".internal").evaluate(el => el.style.fontSize), /^calc\(6\.5px/);
+  await sizeField.press("ArrowUp");
+  assert.match(await restored.locator(".internal").evaluate(el => el.style.fontSize), /^calc\(7px/);
+  await sizeField.fill("0");
+  assert.equal(await sizeField.getAttribute("aria-invalid"), "true");
+  assert.match(await restored.locator(".internal").evaluate(el => el.style.fontSize), /^calc\(7px/);
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:text-size")), "24");
   await page.getByRole("button", { name: "Done", exact: true }).click();
   console.log("ok  text box restored after reopening, in its font and size");
 

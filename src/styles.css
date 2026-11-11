@@ -814,6 +814,9 @@ kbd {
   font: inherit;
   font-size: 13px;
 }
+.text-size { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-2); }
+.text-size input { width: 4.5em; text-align: end; }
+.text-size input[aria-invalid="true"] { outline: 2px solid #d93025; outline-offset: -2px; }
 .shape-preview {
   position: absolute;
   inset: 0;
