@@ -587,6 +587,9 @@ try {
   await pageField.fill("1");
   await pageField.press("Enter");
   await page.locator('button[title^="Text ("]').click();
+  // The font and size chosen before clicking apply to the new box, and are saved with it.
+  await page.getByRole("combobox", { name: "Font", exact: true }).selectOption("serif");
+  await page.getByRole("combobox", { name: "Font size", exact: true }).selectOption("24");
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
@@ -596,8 +599,26 @@ try {
   await page.waitForTimeout(1000);
   await page.keyboard.press("ControlOrMeta+w");
   await page.getByRole("button", { name: /Try a sample/ }).click();
-  await page.locator(".freeTextEditor", { hasText: "Saved text box" }).waitFor({ timeout: 15_000 });
-  console.log("ok  text box restored after reopening");
+  const restored = page.locator(".freeTextEditor", { hasText: "Saved text box" });
+  await restored.waitFor({ timeout: 15_000 });
+  const style = await restored.locator(".internal").evaluate(el => ({ family: el.style.fontFamily, size: el.style.fontSize }));
+  assert.match(style.family, /Times New Roman/);
+  assert.match(style.size, /^calc\(24px/);
+  // A selected box shows its own font, and a new choice changes that box instead of the next one.
+  await page.locator('button[title^="Text ("]').click();
+  await restored.click();
+  const fontPicker = page.getByRole("combobox", { name: "Font", exact: true });
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Font"]')?.value === "serif");
+  const boxFont = () => restored.locator(".internal").evaluate(el => el.style.fontFamily);
+  await fontPicker.selectOption("easyjet");
+  assert.match(await boxFont(), /easyJet Rounded Book/);
+  assert.equal(await page.evaluate(() => localStorage.getItem("folio:text-font")), "serif");
+  // Undo puts the box's previous font back, and the picker follows it.
+  await page.locator('button.pill-btn[title^="Undo"]').click();
+  assert.match(await boxFont(), /Times New Roman/);
+  await page.waitForFunction(() => document.querySelector('select[aria-label="Font"]')?.value === "serif");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  console.log("ok  text box restored after reopening, in its font and size");
 
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(shots, `smoke-${process.platform}.png`) });

@@ -834,6 +834,14 @@ export async function checkReaderTools(app, page, folder, shots) {
   }, Array.from(readFileSync(selectedSample)));
   assert.equal(marks.length, 2);
   assert.ok(marks[0].includes("Highlight") && marks[0].includes("FreeText") && marks[1].includes("Highlight"));
+  // The smoke test's serif text box is drawn in Times in the exported copy, not pdf.js's Helvetica.
+  const exportedBox = await PDFDocument.load(readFileSync(selectedSample));
+  const boxFonts = exportedBox.getPages()[0].node.Annots().asArray().map(ref => exportedBox.context.lookup(ref))
+    .filter(annot => annot.get(PDFName.of("Subtype"))?.toString() === "/FreeText")
+    .map(annot => exportedBox.context.lookup(annot.lookup(PDFName.of("AP")).get(PDFName.of("N"))))
+    .map(ap => ap.dict.lookup(PDFName.of("Resources")).lookup(PDFName.of("Font")))
+    .flatMap(fonts => fonts.values().map(font => exportedBox.context.lookup(font).get(PDFName.of("BaseFont"))?.toString()));
+  assert.deepEqual(boxFonts, ["/Times-Roman"]);
   await page.getByRole("tab", { name: "Outline" }).click();
   await page.getByRole("button", { name: "Reorder pages" }).click();
   await thumb(1).dragTo(thumb(2));

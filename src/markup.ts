@@ -5,6 +5,10 @@ import { AnnotationEditorParamsType, AnnotationEditorType } from "pdfjs-dist";
 import type { EventBus, PDFViewer } from "./viewer";
 import type { PDFDocumentProxy } from "./pdf";
 import { getNotes, saveNotes, type DocNotes, type StoredMark } from "./recent";
+import {
+  DEFAULT_TEXT_FONT, DEFAULT_TEXT_SIZE, fontedTextBox, isTextBox, isTextFont, prepareTextBoxes, setTextBoxFont,
+  textBoxEditors, textBoxSize, type FontedTextBox, type TextFont,
+} from "./textFonts";
 
 export type Mark = StoredMark;
 
@@ -40,6 +44,7 @@ interface EditorLayer {
   add(editor: Editor): void;
 }
 interface UIManager {
+  addEditor(editor: Editor): void;
   getMode(): number;
   readonly hasSelection: boolean;
   endCurrentEditing(): void;
@@ -56,6 +61,8 @@ const toHex = (color: unknown) =>
     : "#ffd84d";
 
 const newId = () => crypto.randomUUID();
+
+export interface TextStyle { font: TextFont; size: number }
 
 export interface MarkupState {
   marks: Mark[];
@@ -80,6 +87,8 @@ export class MarkupController {
   #restoring = new Set<number>();
   #selectionText = "";
   #penWidth = 1;
+  /** Font and size for the next text box. */
+  #textStyle: TextStyle = { font: DEFAULT_TEXT_FONT, size: DEFAULT_TEXT_SIZE };
   #syncTimer = 0;
   #saveTimer = 0;
   #listener: (state: MarkupState) => void;
@@ -92,6 +101,13 @@ export class MarkupController {
     this.#listener = listener;
     bus.on("annotationeditoruimanager", ({ uiManager }: { uiManager: UIManager }) => {
       this.#ui = uiManager;
+      // Every editor passes through here before it's drawn: new text boxes take the chosen font.
+      const addEditor = uiManager.addEditor.bind(uiManager);
+      uiManager.addEditor = (editor) => {
+        prepareTextBoxes(editor);
+        if (isTextBox(editor) && !editor.__folioFont) editor.__folioFont = editor.annotationElementId ? DEFAULT_TEXT_FONT : this.#textStyle.font;
+        addEditor(editor);
+      };
     });
     // pdf.js asks the host app to enter highlight mode when highlighting a selection.
     bus.on("showannotationeditorui", ({ source, mode }: { source: UIManager; mode: number }) => {
@@ -117,6 +133,7 @@ export class MarkupController {
     }
     bus.on("annotationeditormodechanged", ({ mode }: { mode: number }) => {
       if (mode === AnnotationEditorType.INK) this.#applyPenWidth();
+      if (mode === AnnotationEditorType.FREETEXT) this.#applyTextSize();
     });
   }
 
@@ -142,6 +159,68 @@ export class MarkupController {
     if (this.#ui && !this.#ui.hasSelection) {
       this.#bus.dispatch("switchannotationeditorparams", { source: this, type: AnnotationEditorParamsType.INK_THICKNESS, value: this.#penWidth });
     }
+  }
+
+  /** The selected text box's font and size, or those the next text box gets. */
+  get textStyle(): TextStyle {
+    const [box] = this.#selectedTextBoxes();
+    return box ? { font: box.__folioFont ?? DEFAULT_TEXT_FONT, size: textBoxSize(box) } : { ...this.#textStyle };
+  }
+
+  /** Changes the selected text boxes, or the next one when none is selected. Returns whether the default changed. */
+  setTextStyle(style: Partial<TextStyle>) {
+    const boxes = this.#selectedTextBoxes();
+    if (boxes.length) {
+      for (const box of boxes) {
+        if (style.font) setTextBoxFont(box, style.font);
+        if (style.size) box.updateParams(AnnotationEditorParamsType.FREETEXT_SIZE, style.size);
+      }
+      this.scheduleSync();
+      return false;
+    }
+    this.#textStyle = { ...this.#textStyle, ...style };
+    if (style.size) this.#applyTextSize();
+    return true;
+  }
+
+  #applyTextSize() {
+    const editors = textBoxEditors();
+    if (editors) editors.updateDefaultParams(AnnotationEditorParamsType.FREETEXT_SIZE, this.#textStyle.size);
+    else if (this.#ui && !this.#ui.hasSelection) {
+      this.#bus.dispatch("switchannotationeditorparams", { source: this, type: AnnotationEditorParamsType.FREETEXT_SIZE, value: this.#textStyle.size });
+    }
+  }
+
+  /** Every text box on the drawn pages, including ones that came with the PDF. */
+  #textBoxes() {
+    const ui = this.#ui;
+    const boxes = [];
+    for (let page = 0; ui && page < this.#viewer.pagesCount; page++) {
+      for (const editor of ui.getEditors(page)) if (isTextBox(editor) && !editor.deleted) boxes.push(editor);
+    }
+    return boxes;
+  }
+
+  #selectedTextBoxes() {
+    return this.#ui?.hasSelection ? this.#textBoxes().filter(e => e.isSelected) : [];
+  }
+
+  /** Text boxes in a font other than Helvetica, as saved copies will hold them (see drawTextFonts). */
+  fontedTextBoxes(): FontedTextBox[] {
+    const boxes: FontedTextBox[] = [];
+    for (const editor of this.#textBoxes()) {
+      let data: Record<string, unknown> | null = null;
+      try { data = editor.serialize(false); } catch { data = null; }
+      const box = data && fontedTextBox(data);
+      if (box) boxes.push(box);
+    }
+    for (const marks of this.#pending.values()) {
+      for (const mark of marks) {
+        const box = mark.type === "freetext" ? fontedTextBox({ ...mark.data, pageIndex: mark.page }) : null;
+        if (box) boxes.push(box);
+      }
+    }
+    return boxes;
   }
 
   /** Loads saved markup for a newly opened document. Password-protected documents aren't persisted. */
@@ -228,6 +307,10 @@ export class MarkupController {
         if (!editor) {
           missed.push(mark);
           continue;
+        }
+        if (textBox) {
+          prepareTextBoxes(editor);
+          (editor as Editor & { __folioFont?: TextFont }).__folioFont = isTextFont(mark.data.fontFamily) ? mark.data.fontFamily : DEFAULT_TEXT_FONT;
         }
         editor.__folioMark = mark.id;
         editor.__folioGeneration = this.#storageGeneration;
