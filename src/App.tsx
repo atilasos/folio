@@ -21,7 +21,8 @@ import { SearchResults } from "./SearchResults";
 import { Icon, type IconName } from "./icons";
 import { Welcome } from "./Welcome";
 import { Sidebar, type SidebarTab } from "./Sidebar";
-import { MarkupController, type Mark, type MarkupState } from "./markup";
+import { MarkupController, type Mark, type MarkupState, type TextStyle } from "./markup";
+import { DEFAULT_TEXT_FONT, DEFAULT_TEXT_SIZE, TEXT_FONTS, TEXT_SIZES, drawTextFonts, isTextFont, isTextSize, type TextFont } from "./textFonts";
 import { HighlightMenu, NoteBox, SelectionPopover, useTextSelection, type SelectionInfo } from "./Selection";
 import { NotesPanel } from "./NotesPanel";
 import { notesJson, notesMarkdown } from "./noteExport";
@@ -89,6 +90,12 @@ const COLOR_PARAM: Partial<Record<Tool, number>> = {
   ink: AnnotationEditorParamsType.INK_COLOR,
   freetext: AnnotationEditorParamsType.FREETEXT_COLOR,
 };
+
+function storedTextStyle(): TextStyle {
+  const font = readSetting("folio:text-font");
+  const size = Number(readSetting("folio:text-size"));
+  return { font: isTextFont(font) ? font : DEFAULT_TEXT_FONT, size: isTextSize(size) ? size : DEFAULT_TEXT_SIZE };
+}
 
 interface OpenDoc {
   /** Full content identity for Recent, reading position, annotations and chat. */
@@ -204,6 +211,8 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     ink: INKS[0].hex,
     freetext: INKS[0].hex,
   });
+  /** The selected text box's font and size, or the next box's. */
+  const [textStyle, setTextStyle] = useState(storedTextStyle);
   const colorsRef = useRef(colors);
   colorsRef.current = colors;
   const pageRef = useRef(1);
@@ -309,7 +318,12 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     linkService.setHistory(history);
     navigationRef.current = history;
     viewerRef.current = viewer;
-    markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
+    const markupController = new MarkupController(eventBus, viewer, setMarkup);
+    markupRef.current = markupController;
+    markupController.setTextStyle(storedTextStyle());
+    for (const name of ["editingstateschanged", "annotationeditorparamschanged"]) {
+      eventBus.on(name, () => setTextStyle(markupController.textStyle));
+    }
     busRef.current = eventBus;
     linkRef.current = linkService;
 
@@ -678,6 +692,17 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     });
   }, [doc, tool, drawTool, colors.ink, scale, rotation, flash]);
 
+  const chooseTextStyle = (style: Partial<TextStyle>) => {
+    const controller = markupRef.current;
+    if (!controller) return;
+    // With no text box selected, the choice is the next box's and is remembered.
+    if (controller.setTextStyle(style)) {
+      if (style.font) writeSetting("folio:text-font", style.font);
+      if (style.size) writeSetting("folio:text-size", String(style.size));
+    }
+    setTextStyle(controller.textStyle);
+  };
+
   const chooseColor = (hex: string) => {
     // The palette sets the color for the next passage. pdf.js leaves the last highlight selected.
     if (tool === "highlight") markupRef.current?.clearEditorSelection();
@@ -872,8 +897,13 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
         keys.push(key);
       }
       const annotated = storage.size > 0;
-      if (pages?.length) return { bytes: await copyPdfPages(doc.pdf, pages, signal, doc.password), annotated };
-      return { bytes: annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData(), annotated };
+      const fonted = annotated ? markupRef.current!.fontedTextBoxes() : [];
+      const bytes = pages?.length ? await copyPdfPages(doc.pdf, pages, signal, doc.password)
+        : annotated ? await doc.pdf.saveDocument() : await doc.pdf.getData();
+      // pdf.js writes text boxes in Helvetica. Redrawing them rewrites the file, which would break a digital
+      // signature, so signed PDFs keep pdf.js's drawing.
+      if (!fonted.length || (await doc.pdf.getSignatures())?.length) return { bytes, annotated };
+      return { bytes: await drawTextFonts(bytes, fonted, pages?.length ? pages.map(n => n - 1) : undefined), annotated };
     } finally {
       for (const key of keys) storage.remove(key);
       if (exporting.current === doc.pdf) exporting.current = null;
@@ -1451,6 +1481,17 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
                   {["Pen", "Rectangle", "Oval", "Arrow"].map(name => <option key={name}>{name}</option>)}
                 </select>
               )}
+              {tool === "freetext" && <>
+                <select className="draw-tool" aria-label="Font" title="Font" value={textStyle.font}
+                  onChange={e => chooseTextStyle({ font: e.target.value as TextFont })}>
+                  {TEXT_FONTS.map(f => <option key={f.id} value={f.id} style={f.css ? { fontFamily: f.css } : undefined}>{f.name}</option>)}
+                </select>
+                <select className="draw-tool" aria-label="Font size" title="Font size" value={textStyle.size}
+                  onChange={e => chooseTextStyle({ size: Number(e.target.value) })}>
+                  {(TEXT_SIZES.includes(textStyle.size) ? TEXT_SIZES : [...TEXT_SIZES, textStyle.size].sort((a, b) => a - b))
+                    .map(n => <option key={n} value={n}>{n} pt</option>)}
+                </select>
+              </>}
               {tool === "ink" && drawTool === "Pen" && (
                 <select className="draw-tool" aria-label="Pen width" title="Pen width" defaultValue={markupRef.current?.penWidth ?? 1}
                   onChange={e => markupRef.current?.setPenWidth(Number(e.target.value))}>
