@@ -590,6 +590,7 @@ try {
   // The font and size chosen before clicking apply to the new box, and are saved with it.
   await page.getByRole("combobox", { name: "Font", exact: true }).selectOption("serif");
   await page.getByRole("combobox", { name: "Font size", exact: true }).selectOption("24");
+  assert.equal(await page.getByRole("combobox", { name: "Font size", exact: true }).locator("option").first().textContent(), "4 pt");
   // Clicked in the middle of the page's visible part: a fixed spot near the top lands under the toolbar's color
   // picker in a small window, as on CI runners.
   await page.locator('.page[data-page-number="1"] .annotationEditorLayer').click();
